@@ -305,6 +305,160 @@ def diagnostico_tjpr(termos: str = "peculato") -> str:
         return f"Falha no diagnostico: {type(e).__name__}: {e}"
 
 
+
+
+# ===========================================================================
+# BLOCO STJ - Pesquisa no SCON (scon.stj.jus.br)
+# ===========================================================================
+STJ_URL = "https://scon.stj.jus.br/SCON/pesquisar.jsp"
+
+
+def _montar_params_stj(termos: str, pagina: int = 1) -> dict:
+    """Monta os parametros da pesquisa livre do SCON/STJ (acordaos)."""
+    params = {
+        "livre": termos,
+        "b": "ACOR",          # ACOR = acordaos
+        "numDocsPagina": "10",
+    }
+    if pagina and pagina > 1:
+        # No SCON, a paginacao usa o indice do primeiro documento da pagina
+        params["i"] = str((pagina - 1) * 10 + 1)
+    return params
+
+
+def _extrair_resultados_stj(html: str) -> list[dict]:
+    """
+    Le a pagina de resultados do SCON. O layout classico usa pares de
+    <div class="docTitulo"> (rotulo) e <div class="docTexto"> (conteudo)
+    dentro de blocos <div class="documento">. Ha tambem um metodo
+    generico de reserva, caso o site mude.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    resultados: list[dict] = []
+
+    mapa_rotulos = {
+        "processo": "processo",
+        "relator": "relator",
+        "orgao julgador": "orgao_julgador",
+        "data do julgamento": "data_julgamento",
+        "data da publicacao": "data_publicacao",
+        "ementa": "ementa",
+    }
+
+    # --- Camada 1: estrutura classica do SCON ------------------------------
+    documentos = soup.select("div.documento")
+    for doc in documentos:
+        item: dict = {}
+        titulos = doc.select("div.docTitulo, span.docTitulo")
+        for t in titulos:
+            rotulo = _limpar(t.get_text()).lower()
+            rotulo = unicodedata.normalize("NFD", rotulo)
+            rotulo = "".join(c for c in rotulo if not unicodedata.combining(c))
+            corpo = t.find_next(class_="docTexto")
+            if not corpo:
+                continue
+            valor = _limpar(corpo.get_text(" ", strip=True))
+            for chave_rotulo, chave_item in mapa_rotulos.items():
+                if rotulo.startswith(chave_rotulo):
+                    if chave_item == "ementa":
+                        valor = valor[:2500] + ("..." if len(valor) > 2500 else "")
+                    item[chave_item] = valor
+                    break
+        if item:
+            for a in doc.find_all("a", href=True):
+                href = a["href"]
+                if href.startswith("/"):
+                    href = "https://scon.stj.jus.br" + href
+                if "inteiro" in _limpar(a.get_text()).lower() or "Integra" in href:
+                    item.setdefault("links", []).append(href)
+            resultados.append(item)
+
+    if resultados:
+        return resultados
+
+    # --- Camada 2: metodo generico pelo texto ------------------------------
+    texto_pagina = _limpar(soup.get_text(" ", strip=True))
+    pedacos = re.split(r"(?=Processo[:\s])", texto_pagina)
+    for pedaco in pedacos:
+        if len(pedaco) < 150:
+            continue
+        if "relator" in pedaco.lower() or "ementa" in pedaco.lower():
+            resultados.append(_interpretar_texto_do_acordao(pedaco[:4000]))
+    return resultados
+
+
+@mcp.tool()
+def buscar_jurisprudencia_stj(termos: str, pagina: int = 1) -> str:
+    """Pesquisa acordaos na base publica de jurisprudencia do STJ (SCON).
+
+    Args:
+        termos: Palavras-chave da pesquisa livre (ex.: 'peculato dosimetria').
+                Aceita operadores do SCON como E, OU, ADJ e aspas para
+                expressao exata (ex.: "organizacao criminosa" E corrupcao).
+        pagina: Numero da pagina de resultados (1 = primeira; 10 por pagina).
+
+    Returns:
+        Acordaos reais do STJ com processo, relator, orgao julgador, datas,
+        ementa e links. Nunca invente resultados alem dos retornados.
+    """
+    if not termos or not termos.strip():
+        return "Informe ao menos um termo de pesquisa."
+    try:
+        with httpx.Client(
+            headers=HEADERS, timeout=TIMEOUT, follow_redirects=True
+        ) as cli:
+            resp = cli.get(STJ_URL, params=_montar_params_stj(termos.strip(), pagina))
+            resp.raise_for_status()
+            pagina_html = resp.text
+    except httpx.TimeoutException:
+        return "O portal do STJ demorou demais para responder (timeout). Tente novamente."
+    except httpx.HTTPStatusError as e:
+        return (
+            f"O portal do STJ respondeu com erro HTTP {e.response.status_code}. "
+            "O site pode estar temporariamente indisponivel ou ter bloqueado a consulta."
+        )
+    except Exception as e:  # noqa: BLE001
+        return f"Falha inesperada ao consultar o STJ: {type(e).__name__}: {e}"
+
+    resultados = _extrair_resultados_stj(pagina_html)
+    if not resultados:
+        return (
+            f"Nenhum resultado extraido no STJ para '{termos}' (pagina {pagina}).\n"
+            "Pode nao haver acordaos com esses termos, ou o SCON mudou de layout / "
+            "bloqueou a consulta automatizada. Use 'diagnostico_stj' para investigar."
+        )
+    texto = _formatar_resposta(resultados, termos.strip(), pagina)
+    return texto.replace("PORTAL DO TJPR", "PORTAL DO STJ (SCON)")
+
+
+@mcp.tool()
+def diagnostico_stj(termos: str = "peculato") -> str:
+    """Ferramenta de manutencao do STJ: mostra a resposta BRUTA do SCON.
+    Use somente quando 'buscar_jurisprudencia_stj' nao retornar nada.
+
+    Args:
+        termos: Termos de teste (padrao: 'peculato').
+
+    Returns:
+        Status HTTP e amostra do texto da pagina retornada pelo SCON.
+    """
+    try:
+        with httpx.Client(
+            headers=HEADERS, timeout=TIMEOUT, follow_redirects=True
+        ) as cli:
+            resp = cli.get(STJ_URL, params=_montar_params_stj(termos))
+        soup = BeautifulSoup(resp.text, "html.parser")
+        texto = _limpar(soup.get_text(" ", strip=True))
+        return (
+            f"URL consultada: {resp.url}\n"
+            f"Status HTTP: {resp.status_code}\n"
+            f"Tamanho do HTML: {len(resp.text)} caracteres\n"
+            f"Amostra do texto (primeiros 3000 caracteres):\n\n{texto[:3000]}"
+        )
+    except Exception as e:  # noqa: BLE001
+        return f"Falha no diagnostico do STJ: {type(e).__name__}: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Inicio do servidor
 # ---------------------------------------------------------------------------
