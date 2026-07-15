@@ -1,0 +1,8 @@
+# Este arquivo faz o Render configurar tudo sozinho ("Blueprint").
+services:
+  - type: web
+    name: jurisprudencia-tjpr
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
