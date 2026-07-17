@@ -76,8 +76,16 @@ def _consultar_tjpr(params: dict) -> str:
     with httpx.Client(headers=HEADERS, timeout=TIMEOUT, follow_redirects=True) as cli:
         # 1) Abre o formulario publico para obter o cookie de sessao (jsessionid)
         cli.get(TJPR_HOME)
-        # 2) Agora executa a pesquisa, reaproveitando a sessao ja estabelecida
-        resp = cli.get(TJPR_URL, params=params)
+        # 2) A pesquisa do TJPR e enviada por POST: os campos de busca
+        #    (criterioPesquisa etc.) vao no CORPO da requisicao, e nao na URL.
+        #    Enviar por GET apenas devolvia o formulario vazio. O actionType
+        #    permanece na URL, exatamente como o proprio site faz ao pesquisar.
+        resp = cli.post(
+            TJPR_URL,
+            params={"actionType": "pesquisar"},
+            data=params,
+            headers={"Referer": TJPR_HOME},
+        )
         resp.raise_for_status()
         return resp.text
 
@@ -306,7 +314,12 @@ def diagnostico_tjpr(termos: str = "peculato") -> str:
             headers=HEADERS, timeout=TIMEOUT, follow_redirects=True
         ) as cli:
             cli.get(TJPR_HOME)  # abre a pagina primeiro (cria a sessao)
-            resp = cli.get(TJPR_URL, params=_montar_params(termos))
+            resp = cli.post(
+                TJPR_URL,
+                params={"actionType": "pesquisar"},
+                data=_montar_params(termos),
+                headers={"Referer": TJPR_HOME},
+            )
         soup = BeautifulSoup(resp.text, "html.parser")
         texto = _limpar(soup.get_text(" ", strip=True))
         return (
