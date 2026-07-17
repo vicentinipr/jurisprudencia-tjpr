@@ -40,6 +40,9 @@ mcp = FastMCP(
 # Endereco do formulario publico de pesquisa de jurisprudencia do TJPR
 TJPR_URL = "https://portal.tjpr.jus.br/jurisprudencia/publico/pesquisa.do"
 
+# Pagina inicial publica de jurisprudencia (usada para criar a sessao antes da busca)
+TJPR_HOME = "https://portal.tjpr.jus.br/jurisprudencia/"
+
 # Cabecalhos que fazem a consulta parecer um navegador comum
 HEADERS = {
     "User-Agent": (
@@ -61,8 +64,19 @@ def _limpar(texto: str) -> str:
 
 
 def _consultar_tjpr(params: dict) -> str:
-    """Faz a consulta HTTP ao portal do TJPR e devolve o HTML da pagina."""
+    """Faz a consulta HTTP ao portal do TJPR e devolve o HTML da pagina.
+
+    CORRECAO 2026: o portal do TJPR passou a exigir uma SESSAO valida antes
+    da pesquisa. Se a busca for chamada "direto", o site apenas devolve o
+    formulario vazio (0 resultados). Por isso, primeiro abrimos a pagina
+    inicial de jurisprudencia (que cria o cookie de sessao jsessionid) e so
+    entao enviamos a pesquisa, reaproveitando a MESMA sessao. O httpx.Client
+    guarda e reenvia os cookies automaticamente dentro do mesmo "with".
+    """
     with httpx.Client(headers=HEADERS, timeout=TIMEOUT, follow_redirects=True) as cli:
+        # 1) Abre o formulario publico para obter o cookie de sessao (jsessionid)
+        cli.get(TJPR_HOME)
+        # 2) Agora executa a pesquisa, reaproveitando a sessao ja estabelecida
         resp = cli.get(TJPR_URL, params=params)
         resp.raise_for_status()
         return resp.text
@@ -291,6 +305,7 @@ def diagnostico_tjpr(termos: str = "peculato") -> str:
         with httpx.Client(
             headers=HEADERS, timeout=TIMEOUT, follow_redirects=True
         ) as cli:
+            cli.get(TJPR_HOME)  # abre a pagina primeiro (cria a sessao)
             resp = cli.get(TJPR_URL, params=_montar_params(termos))
         soup = BeautifulSoup(resp.text, "html.parser")
         texto = _limpar(soup.get_text(" ", strip=True))
