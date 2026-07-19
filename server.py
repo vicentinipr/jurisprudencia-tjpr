@@ -336,9 +336,17 @@ def diagnostico_tjpr(termos: str = "peculato") -> str:
 
 
 # ===========================================================================
+# ===========================================================================
 # BLOCO STJ - Pesquisa no SCON (scon.stj.jus.br)
 # ===========================================================================
 STJ_URL = "https://scon.stj.jus.br/SCON/pesquisar.jsp"
+
+import cloudscraper
+import requests
+
+scraper_stj = cloudscraper.create_scraper(
+    browser={"browser": "chrome", "platform": "windows", "mobile": False}
+)
 
 
 def _montar_params_stj(termos: str, pagina: int = 1) -> dict:
@@ -432,15 +440,17 @@ def buscar_jurisprudencia_stj(termos: str, pagina: int = 1) -> str:
     if not termos or not termos.strip():
         return "Informe ao menos um termo de pesquisa."
     try:
-        with httpx.Client(
-            headers=HEADERS, timeout=TIMEOUT, follow_redirects=True
-        ) as cli:
-            resp = cli.get(STJ_URL, params=_montar_params_stj(termos.strip(), pagina))
-            resp.raise_for_status()
-            pagina_html = resp.text
-    except httpx.TimeoutException:
-        return "O portal do STJ demorou demais para responder (timeout). Tente novamente."
-    except httpx.HTTPStatusError as e:
+        resp = scraper_stj.get(
+            STJ_URL,
+            params=_montar_params_stj(termos, pagina),
+            headers=HEADERS,
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        pagina_html = resp.text
+    except requests.exceptions.Timeout:
+        return "O portal do STJ demorou demais para responder. Tente novamente em instantes."
+    except requests.exceptions.HTTPError as e:
         return (
             f"O portal do STJ respondeu com erro HTTP {e.response.status_code}. "
             "O site pode estar temporariamente indisponivel ou ter bloqueado a consulta."
@@ -471,10 +481,12 @@ def diagnostico_stj(termos: str = "peculato") -> str:
         Status HTTP e amostra do texto da pagina retornada pelo SCON.
     """
     try:
-        with httpx.Client(
-            headers=HEADERS, timeout=TIMEOUT, follow_redirects=True
-        ) as cli:
-            resp = cli.get(STJ_URL, params=_montar_params_stj(termos))
+        resp = scraper_stj.get(
+            STJ_URL,
+            params=_montar_params_stj(termos),
+            headers=HEADERS,
+            timeout=TIMEOUT,
+        )
         soup = BeautifulSoup(resp.text, "html.parser")
         texto = _limpar(soup.get_text(" ", strip=True))
         return (
