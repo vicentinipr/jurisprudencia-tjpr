@@ -344,6 +344,17 @@ STJ_URL = "https://scon.stj.jus.br/SCON/pesquisar.jsp"
 import cloudscraper
 import requests
 
+# O cloudscraper e baseado na biblioteca "requests", que NAO aceita o objeto
+# httpx.Timeout usado no bloco do TJPR. Aqui o timeout precisa ser numero
+# (ou tupla conexao/leitura). Usar TIMEOUT (httpx) gerava ValueError em
+# TODAS as buscas do STJ.
+TIMEOUT_STJ = (15.0, 40.0)  # (conexao, leitura) em segundos
+
+# Cabecalhos extras do STJ: SEM "User-Agent", para nao sobrescrever o
+# User-Agent que o proprio cloudscraper escolhe (coerente com o navegador
+# que ele simula). Sobrescrever pode fazer o Cloudflare barrar a consulta.
+HEADERS_STJ = {"Accept-Language": "pt-BR,pt;q=0.9"}
+
 scraper_stj = cloudscraper.create_scraper(
     browser={"browser": "chrome", "platform": "windows", "mobile": False}
 )
@@ -443,8 +454,8 @@ def buscar_jurisprudencia_stj(termos: str, pagina: int = 1) -> str:
         resp = scraper_stj.get(
             STJ_URL,
             params=_montar_params_stj(termos, pagina),
-            headers=HEADERS,
-            timeout=TIMEOUT,
+            headers=HEADERS_STJ,
+            timeout=TIMEOUT_STJ,
         )
         resp.raise_for_status()
         pagina_html = resp.text
@@ -484,8 +495,8 @@ def diagnostico_stj(termos: str = "peculato") -> str:
         resp = scraper_stj.get(
             STJ_URL,
             params=_montar_params_stj(termos),
-            headers=HEADERS,
-            timeout=TIMEOUT,
+            headers=HEADERS_STJ,
+            timeout=TIMEOUT_STJ,
         )
         soup = BeautifulSoup(resp.text, "html.parser")
         texto = _limpar(soup.get_text(" ", strip=True))
